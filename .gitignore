@@ -1,0 +1,5 @@
+.venv/
+Anomaly Detection - Flow Based Features/
+__pycache__/
+*.csv
+*.log
