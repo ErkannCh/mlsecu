@@ -1,5 +1,8 @@
 .venv/
 Anomaly Detection - Flow Based Features/
+Anomaly_Detection-Flow_Based_Features/
+Device_Identification_Anomaly_Detection-Packet_Based_Features/
+
 __pycache__/
 *.csv
 *.log
