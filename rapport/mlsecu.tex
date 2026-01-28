@@ -1,0 +1,542 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[provide=*,french]{babel}
+\usepackage{caption}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{geometry}
+\geometry{
+  left=1cm,
+  right=1cm,
+  top=1cm,
+  bottom=1.5cm
+}
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{fancyvrb}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  citecolor=blue!50!black,
+  pdftitle={CYBERML (2026)},
+}
+
+\newcommand{\coursename}{CYBERML}
+\newcommand{\datasetname}{CIC IoT-DIAD 2024 (Packet-Based Features)}
+\newcommand{\reporttitle}{CYBERML 2026}
+
+\title{\reporttitle}
+\author{\textit{Lucas Collemare, Antoine Malmezac, Cyprien Deruelle}\\ Dataset : \datasetname}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\clearpage
+
+% =============================================================================
+% 2) Résumé (abstract)
+% =============================================================================
+\section{Abstract}
+
+Ce rapport présente une chaîne batch complète de traitement de données réseau pour la détection d'anomalies (non supervisée) et la classification d'attaques dans un contexte IoT. L'étude est réalisée sur \datasetname{} au format CSV. Pour limiter les fuites de données, l'évaluation utilise un split par fichier (group) : les échantillons d'un même CSV ne peuvent pas apparaître simultanément en apprentissage et en test.\\
+
+\noindent En détection d'anomalies binaire (Benign vs Attack), trois approches non supervisées (Isolation Forest, One-Class SVM, PCA par erreur de reconstruction) sont comparées et atteignent des AUPRC comprises entre \SI{0.713}{} et \SI{0.773}{} sur notre protocole. En classification supervisée binaire, trois modèles complémentaires (régression logistique, Random Forest, XGBoost) sont évalués ; XGBoost obtient la meilleure AUPRC (\SI{0.950}{}). Au niveau familles d'attaque, Random Forest atteint une balanced accuracy de \SI{0.825}{}, et au niveau sous-types, Random Forest atteint \SI{0.806}{} de balanced accuracy.
+
+\section{Introduction}
+
+Ce projet vise à la conception et l'évaluation d'une chaîne de données pour l'analyse cybersécurité, incluant : trois méthodes non supervisées et trois classificateurs supervisés, évalués avec des métriques adaptées (matrices de confusion, précision, rappel, AUPRC, balanced accuracy, MCC).
+
+\clearpage
+
+% =============================================================================
+% 4) Présentation et caractérisation du dataset
+% =============================================================================
+\section{Présentation et caractérisation du dataset}
+
+\subsection{Description générale}
+Le dataset étudié est \datasetname{}. Les données sont fournies sous forme de fichiers CSV regroupés par familles d'attaques et sous-types (sous-dossiers). Chaque ligne représente un enregistrement de trafic décrit par un ensemble de caractéristiques (features) extraites du trafic réseau. Les colonnes comprennent un mélange de variables numériques (ex. tailles, entropies, compteurs, statistiques temporelles) et de champs catégoriels (ex. identifiants de protocole, chaînes applicatives).
+
+\subsection{Organisation en familles et sous-types}
+
+\begin{table}[H]
+  \centering
+  \caption{Nombre de fichiers CSV par famille (répertoire Packet-Based Features).}
+  \label{tab:files-per-family}
+\begingroup
+\catcode`\_=12
+\begin{tabular}{lr}
+\toprule
+family & n_csv \\
+\midrule
+DDoS & 101 \\
+DoS & 38 \\
+Mirai & 22 \\
+Web-Based & 6 \\
+Recon & 5 \\
+Benign & 4 \\
+Spoofing & 3 \\
+BruteForce & 1 \\
+\bottomrule
+\end{tabular}
+\endgroup
+\end{table}
+
+Au niveau des sous-types, les dossiers présents incluent notamment :\\
+- DDoS : DDoS-UDP\_Flood, DDoS-TCP\_Flood, DDoS-HTTP\_Flood, DDoS-SlowLoris, DDoS-ACK\_Fragmentation, etc.\\
+- DoS : DoS-UDP\_Flood, DoS-TCP\_Flood, DoS-SYN\_Flood, DoS-HTTP\_Flood.\\
+- Recon : Recon-PortScan, Recon-PingSweep, Recon-OSScan, VulnerabilityScan, etc.\\
+- Spoofing : DNS\_Spoofing, MITM-ArpSpoofing.\\
+- Web-Based : SqlInjection, XSS, CommandInjection, Uploading\_Attack, etc.\\
+- BruteForce : DictionaryBruteForce.\\
+- Mirai : Mirai-greip\_flood.\\
+
+\newpage
+\subsection{Déséquilibre des classes et échantillonnage}
+En pratique, les datasets de trafic réseau sont souvent déséquilibrés : le trafic bénin est majoritaire et les attaques sont rares (ce qui rend l'accuracy peu informative). Dans notre implémentation, un chargement RAM-safe est utilisé : lecture par chunks et plafonds (caps) pour limiter la taille des ensembles de travail. Cette stratégie modifie la distribution par rapport au dataset complet, mais conserve les propriétés importantes pour l'évaluation (variabilité inter-fichiers, diversité des familles et sous-types).
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.48\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/dist_binary.png}
+    \caption{Binaire : Benign vs Attack.}
+    \label{fig:dist-binary}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.48\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/dist_families.png}
+    \caption{Familles (plafond à \SI{3000}{} par famille).}
+    \label{fig:dist-families}
+  \end{subfigure}
+
+  \vspace{0.6em}
+  \begin{subfigure}[b]{0.85\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/dist_subtypes.png}
+    \label{fig:dist-subtypes}
+  \end{subfigure}
+  \caption{Répartition des classes après échantillonnage RAM-safe.}
+  \label{fig:dist-classes}
+\end{figure}
+
+\clearpage
+
+% =============================================================================
+% 5) Chaîne complète de traitement des données
+% =============================================================================
+\section{Chaîne complète de traitement des données}
+\label{sec:pipeline}
+
+\subsection{Prétraitement et prévention des fuites}
+Les fichiers CSV contiennent des colonnes potentiellement identifiantes (adresses IP, ports, adresses MAC, timestamps, identifiants de flux). Ces variables peuvent introduire un biais fort (apprentissage de signatures spécifiques à un capture) et amplifier les risques de fuite d'information entre apprentissage et test. Nous supprimons donc ces colonnes via : \\
+- Une liste de colonnes candidates (src\_ip, dst\_ip, src\_port, dst\_port, timestamp, etc.),\\
+- Des motifs (patterns) sur les noms de colonnes.
+
+\subsection{Chargement RAM-safe et harmonisation des schémas}
+Les CSV présentent des schémas hétérogènes. La chaîne de chargement procède comme suit :\\ \\
+1. Scan des en-têtes : constitution de l'union des colonnes observées.\\
+2. Sélection des caractéristiques : suppression des colonnes identifiantes et de la colonne Label.\\
+3. Lecture par chunks (\SI{20000}{} lignes) et limitation à 1 chunk par fichier (pour contrôler la RAM).\\
+4. Conversion numérique : conversion des colonnes retenues en numérique (errors=coerce), remplacement des infinis par NaN.\\
+5. Gestion des valeurs manquantes : remplissage à \SI{0}{} (nan\_to\_num) avant apprentissage.\\
+6. Plafonds d'échantillons :\\
+- binaire : \SI{50000}{} Benign et \SI{50000}{} Attack,\\
+- familles : \SI{3000}{} par famille,\\
+- sous-types : \SI{10000}{} par sous-type.
+
+
+\subsection{Séparation train/test par fichier}
+Pour limiter la fuite d'information, le split train/test est réalisé par fichier (group). un fichier CSV est entièrement assigné au train ou au test. Concrètement, on sélectionne environ \SI{20}{\percent} des fichiers par classe pour constituer le test. En cas de groupe mixte (un même fichier contenant plusieurs labels) ou de dégénérescence (train/test vide), un split stratifié standard est utilisé en repli.
+
+\subsection{Normalisation et mise en forme}
+Les modèles sont entraînés sur les caractéristiques normalisées via StandardScaler (moyenne nulle, variance unité) ajusté sur l'ensemble d'entraînement puis appliqué au test. Ce choix :\\
+- Stabilise la régression logistique et l'OCSVM,\\
+- Met les caractéristiques sur une échelle comparable.
+
+
+\clearpage
+
+% =============================================================================
+% 6) Méthodes de détection d’anomalies (3 algos)
+% =============================================================================
+\section{Méthodes de classification et de détection d’anomalies}
+
+\subsection{Détection d'anomalies (non supervisée)}
+La détection d'anomalies est évaluée dans un cadre classique : le modèle est appris uniquement sur le trafic Benign, puis appliqué au test contenant Benign et Attack. Le détecteur produit soit une étiquette (anomalie vs normal) soit un score (anomalie croissante), utilisé pour l'AUPRC.
+
+\paragraph{Isolation Forest}
+Isolation Forest isole des observations via des partitions aléatoires ; les points rares nécessitent moins de splits. Nous réglons un taux de contamination (clippé dans $[0.01,0.30]$) et entraînons uniquement sur Benign.
+
+\paragraph{One-Class SVM (RBF)}
+One-Class SVM apprend une frontière séparant la masse de données (Benign) de l'extérieur. Le noyau RBF capture des frontières non linéaires ; le paramètre $\nu$ contrôle la fraction d'outliers.
+
+\paragraph{PCA par erreur de reconstruction}
+La PCA (variance expliquée \SI{95}{\percent}) modélise un sous-espace principal du trafic Benign. Le score d'anomalie est l'erreur de reconstruction (MSE). Un seuil est choisi au quantile \SI{95}{\percent} des erreurs sur Benign (train).
+
+% =============================================================================
+% 7) Méthodes de classification (3 algos)
+% =============================================================================
+\subsection{Classification d'anomalies (supervisée)}
+
+Pour la classification, le modèle est entraîné sur un ensemble annoté et prédit directement une classe. Nous comparons trois modèles supervisés complémentaires afin de couvrir des hypothèses inductives différentes.
+
+\paragraph{Régression logistique}
+Modèle linéaire entraîné par optimisation convexe. Il sert de référence robuste et rapide, et fournit un score probabiliste exploitable pour tracer des courbes précision-rappel.
+
+\paragraph{Random Forest}
+Ensemble d'arbres entraînés sur des sous-échantillons et sous-ensembles de variables. Cette approche réduit la variance, capture des interactions non linéaires et se comporte bien en tabulaire.
+
+\paragraph{XGBoost}
+Boosting d'arbres avec régularisation et optimisation efficace. Il offre souvent les meilleures performances sur données tabulaires, au prix d'un réglage plus fin.
+
+\subsubsection{Tâches et niveaux de granularité}
+Nous étudions trois niveaux de tracking :
+\\
+- Binaire : supervisé (classification) et non supervisé (détection d'anomalies).\\
+- Familles : uniquement supervisé (classification multi-classes).\\
+- Sous-types : uniquement supervisé (classification multi-classes, Benign conservé).
+\clearpage
+
+% =============================================================================
+% 8) Benchmark expérimental
+% =============================================================================
+\section{Benchmark expérimental}
+\label{sec:benchmark}
+
+\subsection{Métriques et définitions}
+On note $TP$, $FP$, $TN$, $FN$ les composantes de la matrice de confusion binaire. Les métriques rapportées sont :\\
+- Précision : $\mathrm{Prec} = \frac{TP}{TP+FP}$ (avec zero\_division=0)\\
+- Rappel : $\mathrm{Rec} = \frac{TP}{TP+FN}$\\
+- Balanced accuracy : moyenne des rappels par classe, $\mathrm{BAcc}=\frac{1}{2}\left(\frac{TP}{TP+FN}+\frac{TN}{TN+FP}\right)$\\
+- MCC (Matthews Correlation Coefficient) : corrélation entre prédictions et vérité terrain, robuste au déséquilibre\\
+- AUPRC : aire sous la courbe précision-rappel, adaptée aux scénarios où la classe positive est rare \\
+
+\noindent En multi-classes, la précision et le rappel sont rapportés en macro-moyenne sur les classes présentes en test ; la balanced accuracy est la moyenne des rappels par classe, et l'AUPRC est une macro-moyenne en one-vs-rest quand des probabilités sont disponibles.
+
+\newpage
+\subsection{Détection d'anomalies : résultats non supervisés (binaire)}
+Les résultats suivants comparent trois détecteurs non supervisés entraînés uniquement sur le trafic Benign et évalués sur un test Benign vs Attack.
+
+\begin{table}[H]
+  \centering
+  \caption{Benchmark binaire non supervisé (détection d'anomalies).}
+  \label{tab:metrics-unsup}
+\resizebox{\textwidth}{!}{%
+  \begingroup
+  \catcode`\_=12
+  \begin{tabular}{llrrrrr}
+  \toprule
+  scenario & title & precision & recall & auprc & balanced acc & mcc \\
+  \midrule
+  Binaire (non supervisé) & IsolationForest & 0.7049 & 0.4296 & 0.7127 & 0.6209 & 0.2610 \\
+  Binaire (non supervisé) & OneClassSVM & 0.8867 & 0.3932 & 0.7727 & 0.6704 & 0.4069 \\
+  Binaire (non supervisé) & PCA-recon & 0.8605 & 0.4698 & 0.7323 & 0.6951 & 0.4350 \\
+  \bottomrule
+  \end{tabular}
+  \endgroup
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_binary_iforest.png}
+    \caption{Isolation Forest}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_binary_ocsvm.png}
+    \caption{One-Class SVM}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_binary_pca.png}
+    \caption{PCA (recon.)}
+  \end{subfigure}
+  \caption{Matrices de confusion -- binaire non supervisé.}
+  \label{fig:cm-unsup}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/pr_binary_iforest.png}
+    \caption{Isolation Forest}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/pr_binary_ocsvm.png}
+    \caption{One-Class SVM}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/pr_binary_pca.png}
+    \caption{PCA (recon.)}
+  \end{subfigure}
+  \caption{Courbes précision-rappel (PR) -- binaire non supervisé.}
+  \label{fig:pr-unsup}
+\end{figure}
+
+
+
+\newpage
+\subsection{Résumé des résultats supervisés (binaire)}
+Pour le cas binaire, les modèles supervisés atteignent des performances nettement supérieures aux détecteurs non supervisés.
+
+\begin{table}[H]
+  \centering
+  \caption{Benchmark binaire supervisé (détection d'anomalies).}
+  \label{tab:metrics-unsup}
+\resizebox{\textwidth}{!}{%
+  \begingroup
+  \catcode`\_=12
+  \begin{tabular}{llrrrrr}
+  \toprule
+  scenario & Modèle & precision & recall & auprc & balanced acc & mcc \\
+  \midrule
+  Binaire (supervisé) & LogisticRegression & 0.8111 & 0.7753 & 0.9014 & 0.7933 & 0.5867 \\
+  Binaire (supervisé) & RandomForest & 0.7989 & 0.9064 & 0.8914 & 0.8340 & 0.6765 \\
+  Binaire (supervisé) & XGBoost & 0.7912 & 0.9171 & 0.9495 & 0.8321 & 0.6757 \\
+  \bottomrule
+  \end{tabular}
+  \endgroup
+}
+\end{table}
+
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_binary_lr.png}
+    \caption{LogReg}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_binary_rf.png}
+    \caption{RF}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_binary_xgb.png}
+    \caption{XGB}
+  \end{subfigure}
+  \caption{Matrices de confusion -- binaire supervisé.}
+  \label{fig:cm-sup}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/pr_binary_lr.png}
+    \caption{LogReg}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/pr_binary_rf.png}
+    \caption{RF}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/pr_binary_xgb.png}
+    \caption{XGB}
+  \end{subfigure}
+  \caption{Courbes précision-rappel (PR) -- binaire supervisé.}
+  \label{fig:pr-sup}
+\end{figure}
+
+\newpage
+\subsection{Résultats binaire : non supervisé vs supervisé}
+On observe un gain net des modèles supervisés (AUPRC, MCC), ce qui est attendu lorsque des labels sont disponibles.
+
+\begin{table}[H]
+  \centering
+  \caption{Benchmark binaire (non supervisé + supervisé).}
+  \label{tab:metrics-bin}
+\resizebox{\textwidth}{!}{%
+  \begingroup
+  \catcode`\_=12
+  \begin{tabular}{llrrrrr}
+  \toprule
+  scenario & title & precision & recall & auprc & balanced acc & mcc \\
+  \midrule
+  Binaire (non supervisé) & IsolationForest & 0.7049 & 0.4296 & 0.7127 & 0.6209 & 0.2610 \\
+  Binaire (non supervisé) & OneClassSVM & 0.8867 & 0.3932 & 0.7727 & 0.6704 & 0.4069 \\
+  Binaire (non supervisé) & PCA-recon & 0.8605 & 0.4698 & 0.7323 & 0.6951 & 0.4350 \\
+  Binaire (supervisé) & LogisticRegression & 0.8111 & 0.7753 & 0.9014 & 0.7933 & 0.5867 \\
+  Binaire (supervisé) & RandomForest & 0.7989 & 0.9064 & 0.8914 & 0.8340 & 0.6765 \\
+  Binaire (supervisé) & XGBoost & 0.7912 & 0.9171 & 0.9495 & 0.8321 & 0.6757 \\
+  \bottomrule
+  \end{tabular}
+  \endgroup
+}
+\end{table}
+
+
+
+
+
+\newpage
+\subsection{Résultats multi-classes : familles}
+\begin{table}[H]
+  \centering
+  \caption{Benchmark multi-classes (familles).}
+  \label{tab:metrics-fam}
+\resizebox{\textwidth}{!}{%
+  \begingroup
+  \catcode`\_=12
+  \begin{tabular}{llrrrrr}
+  \toprule
+  scenario & title & precision & recall & auprc & balanced acc & mcc \\
+  \midrule
+  Familles & LogisticRegression & 0.7590 & 0.7614 & 0.7802 & 0.7721 & 0.7897 \\
+  Familles & RandomForest & 0.8110 & 0.8056 & 0.8411 & 0.8250 & 0.8428 \\
+  Familles & XGBoost & 0.7733 & 0.7728 & 0.8140 & 0.7971 & 0.7885 \\
+  \bottomrule
+  \end{tabular}
+  \endgroup
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_families_lr_nb.png}
+    \caption{LogReg}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_families_rf_nb.png}
+    \caption{RF}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_families_xgb_nb.png}
+    \caption{XGB}
+  \end{subfigure}
+  \caption{Matrices de confusion -- familles (classes présentes en test).}
+  \label{fig:cm-fam}
+\end{figure}
+
+\subsection{Résultats multi-classes : sous-types}
+\begin{table}[H]
+  \centering
+  \caption{Benchmark multi-classes (sous-types).}
+  \label{tab:metrics-sub}
+\resizebox{\textwidth}{!}{%
+  \begingroup
+  \catcode`\_=12
+  \begin{tabular}{llrrrrr}
+  \toprule
+  scenario & title & precision & recall & auprc & balanced acc & mcc \\
+  \midrule
+  Sous-types & LogisticRegression & 0.6027 & 0.7304 & 0.7329 & 0.7817 & 0.6652 \\
+  Sous-types & RandomForest & 0.6272 & 0.7825 & 0.8597 & 0.8057 & 0.6541 \\
+  Sous-types & XGBoost & 0.6849 & 0.7715 & 0.8604 & 0.7939 & 0.6408 \\
+  \bottomrule
+  \end{tabular}
+  \endgroup
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_subtypes_lr_nb.png}
+    \caption{LogReg}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_subtypes_rf_nb.png}
+    \caption{RF}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.32\textwidth}\centering
+    \includegraphics[width=\textwidth]{figures/cm_subtypes_xgb_nb.png}
+    \caption{XGB}
+  \end{subfigure}
+  \caption{Matrices de confusion -- sous-types (classes présentes en test).}
+  \label{fig:cm-sub}
+\end{figure}
+
+\subsection{Meilleurs modèles par tâche}
+\begin{table}[H]
+  \centering
+  \caption{Meilleur modèle par tâche (selon la métrique indiquée).}
+  \label{tab:best-models}
+\begin{tabular}{lllr}
+\toprule
+Tâche & Meilleur & Métrique & Valeur \\
+\midrule
+Binaire & XGBoost & AUPRC & 0.9495 \\
+Familles & RandomForest & Balanced Acc & 0.8250 \\
+Sous-types & RandomForest & Balanced Acc & 0.8057 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\clearpage
+
+% =============================================================================
+% 9) Analyse et discussion
+% =============================================================================
+\section{Analyse et discussion des résultats}
+\label{sec:discussion}
+
+\subsection{Détection vs classification : rôle opérationnel}
+Les résultats confirment la complémentarité des approches :
+Les méthodes non supervisées sont adaptées au signal faible et à l'absence de labels, mais leurs performances restent limitées en présence d'attaques proches du trafic normal (Figures~\ref{fig:pr-unsup}). À l'inverse, les méthodes supervisées exploitent des patterns discriminants et atteignent des AUPRC élevées en binaire (Table~\ref{tab:metrics-bin}), au prix d'un besoin en données annotées.
+
+\subsection{Granularité du tracking (familles et sous-types)}
+Le passage du binaire à la multi-classe illustre un compromis :
+La classification par familles est un niveau pertinent pour le tracking SOC : elle réduit le nombre de classes tout en fournissant une sémantique opérationnelle (DoS/DDoS vs Recon vs Web). La classification par sous-types offre une granularité plus fine, mais amplifie le déséquilibre et la confusion entre attaques proches (Table~\ref{tab:metrics-sub}, Figure~\ref{fig:cm-sub}).
+
+% =============================================================================
+% 11) Conclusion et perspectives
+% =============================================================================
+\section{Perspectives et limites}
+
+\subsection{Limites}
+Plusieurs limites doivent être prises en compte avant interprétation opérationnelle. L'échantillonnage RAM-safe (un chunk par fichier et plafonds) peut sous-échantillonner certains régimes de trafic. De plus, la conversion numérique avec coercition transforme les valeurs non numériques en 0, ce qui peut réduire l'information utile. Enfin, la vérité terrain est déduite de l'arborescence des fichiers (famille/sous-type), sans vérification d'une colonne de label au niveau ligne.
+
+
+\subsection{Perspectives}
+- Enrichir le prétraitement (encodage des catégorielles, sélection de variables, détection de constantes).\\
+- Renforcer le protocole (validation croisée par fichiers, split temporel si disponible).\\
+- Étudier des mécanismes d'explicabilité (importance de variables, SHAP) pour un usage SOC.
+
+\section{Conclusion}
+Ce projet a mis en place une chaîne batch reproductible pour analyser des données réseau IoT, en combinant détection d'anomalies et classification supervisée à plusieurs granularités (binaire, familles, sous-types). Les résultats montrent :
+des performances limitées en non supervisé, des performances élevées en supervisé, avec un avantage pour XGBoost en binaire et Random Forest en multi-classes et une sensibilité aux variations de distribution et au bruit des caractéristiques.
+
+
+
+\clearpage
+
+% =============================================================================
+% 12) Références bibliographiques
+% =============================================================================
+\addcontentsline{toc}{section}{Références bibliographiques}
+\begin{thebibliography}{99}
+
+\bibitem{cic-iot-diad}
+Canadian Institute for Cybersecurity (CIC), CIC IoT-DIAD 2024 Dataset. University of New Brunswick. (Voir la description du cours et les liens fournis dans le sujet.)
+
+\bibitem{liu-iforest}
+F.~T. Liu, K.~M. Ting, and Z.-H. Zhou, Isolation Forest. 2008.
+
+\bibitem{scholkopf-ocsvm}
+B.~Schölkopf, J.~Platt, J.~Shawe-Taylor, A.~Smola, and R.~Williamson, Estimating the Support of a High-Dimensional Distribution. 2001.
+
+\bibitem{breiman-rf}
+L.~Breiman, Random Forests. 2001.
+
+\bibitem{chen-xgb}
+T.~Chen and C.~Guestrin, XGBoost: A Scalable Tree Boosting System. 2016.
+
+\bibitem{davis-auprc}
+J.~Davis and M.~Goadrich, The Relationship Between Precision-Recall and ROC Curves. 2006.
+
+\bibitem{matthews-mcc}
+B.~W. Matthews, Comparison of the predicted and observed secondary structure of T4 phage lysozyme. 1975.
+
+\end{thebibliography}
+\end{document}
